@@ -1,4 +1,5 @@
 import os
+from dotenv import load_dotenv
 import streamlit as st
 import requests
 import json
@@ -18,7 +19,7 @@ st.title("🕶️ Meta Ray-Ban Smart Glasses Assistant")
 st.caption("Your AI-powered guide to Meta Ray-Ban smart glasses. Ask me anything about features, pricing, models, or troubleshooting!")
 
 # --- API Configuration ---
-FASTAPI_URL = os.getenv("FASTAPI_URL", "http://localhost:8002")
+FASTAPI_URL = os.getenv("FASTAPI_URL")
 STREAM_ENDPOINT = f"{FASTAPI_URL}/ask-stream"
 NORMAL_ENDPOINT = f"{FASTAPI_URL}/ask"
 
