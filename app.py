@@ -1,5 +1,4 @@
 import os
-from dotenv import load_dotenv
 import streamlit as st
 import requests
 import json
@@ -31,6 +30,32 @@ if "session_id" not in st.session_state:
 if "streaming_enabled" not in st.session_state:
     st.session_state.streaming_enabled = False
 
+# --- Helper Functions ---
+def clear_conversation():
+    """Clear conversation both locally and on backend"""
+    try:
+        if st.session_state.session_id:
+            # Send a request to clear the backend session
+            payload = {
+                "query": "clear",  # Dummy query
+                "session_id": st.session_state.session_id,
+                "clear_history": True
+            }
+            
+            # Try to clear on backend (don't fail if backend is down)
+            try:
+                requests.post(NORMAL_ENDPOINT, json=payload, timeout=5)
+            except:
+                pass  # Continue even if backend request fails
+        
+        # Clear frontend state
+        st.session_state.messages = []
+        st.session_state.session_id = None
+        st.success("Conversation cleared!")
+        
+    except Exception as e:
+        st.error(f"Error clearing conversation: {str(e)}")
+
 # --- Sidebar Configuration ---
 with st.sidebar:
     st.header("Settings")
@@ -45,14 +70,15 @@ with st.sidebar:
     
     # Clear conversation button
     if st.button("Clear Conversation", type="secondary"):
-        st.session_state.messages = []
-        st.session_state.session_id = None
+        clear_conversation()
         st.rerun()
     
     # Session info
     if st.session_state.session_id:
         st.write(f"**Session ID:** `{st.session_state.session_id[:8]}...`")
         st.write(f"**Messages:** {len(st.session_state.messages)}")
+    else:
+        st.write("**Session:** Not started")
     
     # API Status
     try:
@@ -83,17 +109,29 @@ def stream_response(url: str, payload: Dict[Any, Any]) -> Generator[Dict[str, An
             
             for line in response.iter_lines():
                 if line:
-                    try:
-                        chunk = json.loads(line.decode('utf-8'))
-                        yield chunk
-                    except json.JSONDecodeError as e:
-                        st.error(f"JSON decode error: {e}")
+                    line_text = line.decode('utf-8').strip()
+                    if not line_text:
                         continue
                         
+                    try:
+                        chunk = json.loads(line_text)
+                        yield chunk
+                    except json.JSONDecodeError as e:
+                        # Log the error but don't break the stream
+                        print(f"JSON decode error: {e}, line: {line_text}")
+                        continue
+                        
+    except requests.exceptions.Timeout:
+        yield {"type": "error", "content": "Request timed out. Please try again."}
+    except requests.exceptions.ConnectionError:
+        yield {"type": "error", "content": "Could not connect to backend. Please check if the server is running."}
     except requests.exceptions.RequestException as e:
         yield {"type": "error", "content": f"Connection error: {str(e)}"}
     except Exception as e:
         yield {"type": "error", "content": f"Unexpected error: {str(e)}"}
+    finally:
+        # Ensure we always yield a completion signal
+        yield {"type": "stream_end"}
 
 def handle_streaming_response(prompt: str):
     """Handle streaming response with real-time updates"""
@@ -124,7 +162,7 @@ def handle_streaming_response(prompt: str):
             
             elif chunk_type == "status":
                 # Show status updates
-                status_placeholder.info(f"🔄 {chunk_content}")
+                status_placeholder.info(f"📄 {chunk_content}")
             
             elif chunk_type == "sentence":
                 # Accumulate and display sentences
@@ -227,18 +265,29 @@ def handle_normal_response(prompt: str):
         st.session_state.messages.append({"role": "assistant", "content": error_message})
 
 # --- Handle User Input ---
-if prompt := st.chat_input("Ask about Meta Ray-Ban glasses..."):
+if prompt := st.chat_input("Ask about Meta Ray-Ban glasses...", key="chat_input"):
     # Add user message to chat history
     st.session_state.messages.append({"role": "user", "content": prompt})
+    
+    # Display user message immediately
     with st.chat_message("user"):
         st.markdown(prompt)
 
     # --- Call FastAPI Backend ---
     with st.chat_message("assistant"):
-        if st.session_state.streaming_enabled:
-            handle_streaming_response(prompt)
-        else:
-            handle_normal_response(prompt)
+        try:
+            if st.session_state.streaming_enabled:
+                handle_streaming_response(prompt)
+            else:
+                handle_normal_response(prompt)
+        except Exception as e:
+            st.error(f"Failed to process request: {str(e)}")
+            # Add error to conversation history
+            st.session_state.messages.append({
+                "role": "assistant", 
+                "content": f"I apologize, but I encountered an error: {str(e)}",
+                "sources": []
+            })
 
 # --- Footer ---
 st.markdown("---")
